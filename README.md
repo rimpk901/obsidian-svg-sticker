@@ -28,19 +28,19 @@ Choose icons from your own collection, customize the icon folder, and organize y
 
 Choose an SVG icon and assign it to a regular note or folder in Obsidian.
 
-![Assigning an icon without Make.md](./assets/gifs/Screencast 2026-11-13 10_33_28.gif)
+![Assigning an icon without Make.md](./assets/gifs/Screencast%202026-11-13%2010_33_28.gif)
 
 ### 2. Make.md integration
 
 Assign custom SVG icons to Make.md Spaces using the context menu.
 
-![Make.md icon assignment](./assets/gifs/Screencast 2026-11-13 10_34_06.gif)
+![Make.md icon assignment](./assets/gifs/Screencast%202026-11-13%2010_34_06.gif)
 
 ### 3. Bulk icon assignment
 
 Select multiple Make.md items and assign the same SVG icon to all of them in one action.
 
-![Bulk icon assignment](./assets/gifs/Screencast 2026-11-13 10_34_30.gif)
+![Bulk icon assignment](./assets/gifs/Screencast%202026-11-13%2010_34_30.gif)
 
 ---
 
