@@ -9,7 +9,6 @@ import { createTranslator } from "./i18n";
 import { StickerLanguage } from "./types";
 
 export class StickerModal extends Modal {
-  private selectedPath: string | null = null;
   private searchValue = "";
   private page = 0;
   private readonly pageSize = 96;
@@ -18,7 +17,7 @@ export class StickerModal extends Modal {
   constructor(
     app: App,
     private onChoose: (path: string) => void,
-    private onRemove?: () => void,
+    private onRemove?: () => void | Promise<void>,
     private iconFolder = "embed/icons",
     language: StickerLanguage = "auto"
   ) {
@@ -57,7 +56,8 @@ export class StickerModal extends Modal {
     root.addClass("svg-sticker-content");
 
     root.createEl("h2", {
-      text: this.t("choose")
+      text: this.t("choose"),
+      cls: "svg-sticker-title"
     });
 
     const search = root.createEl("input", {
@@ -119,7 +119,6 @@ export class StickerModal extends Modal {
       });
 
       item.addEventListener("click", () => {
-        this.selectedPath = file.path;
         this.onChoose(file.path);
         this.close();
       });
@@ -167,7 +166,10 @@ export class StickerModal extends Modal {
       remove.addClass("mod-warning");
 
       remove.addEventListener("click", () => {
-        this.onRemove?.();
+        void Promise.resolve(this.onRemove?.()).catch(error => {
+          console.error("[SVG Sticker] Failed to remove sticker", error);
+        });
+
         this.close();
       });
     }

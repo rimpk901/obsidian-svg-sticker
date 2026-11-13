@@ -6,7 +6,6 @@ import {
   TFolder,
   Notice,
   PluginSettingTab,
-  Setting
 } from "obsidian";
 
 import { StickerModal } from "./StickerModal";
@@ -31,6 +30,16 @@ export default class SvgStickerPlugin extends Plugin {
   private makeAdapter!: MakeMDAdapter;
   private observer: MutationObserver | null = null;
   private refreshQueued = false;
+
+  private runSafely(
+    operation: () => Promise<unknown>,
+    context: string
+  ): void {
+    void operation().catch(error => {
+      console.error(`[SVG Sticker] ${context}`, error);
+      new Notice(this.t("operationError"));
+    });
+  }
 
   private get iconFolder(): string {
     return this.data.settings.iconFolder
@@ -120,7 +129,10 @@ export default class SvgStickerPlugin extends Plugin {
         if (!file) return false;
 
         if (!checking) {
-          this.openPicker(file);
+          this.runSafely(
+            () => this.openPicker(file),
+            "Opening sticker picker failed"
+          );
         }
 
         return true;
@@ -147,25 +159,34 @@ export default class SvgStickerPlugin extends Plugin {
         if (!(file instanceof TFile || file instanceof TFolder)) {
           return;
         }
-
         menu.addItem(item => {
           item
             .setTitle(this.t("choose"))
             .setIcon("image")
-            .onClick(() => this.openPicker(file));
+            .onClick(() => {
+              this.runSafely(
+                () => this.openPicker(file),
+                "Opening sticker picker failed"
+              );
+            });
         });
 
         menu.addItem(item => {
           item
             .setTitle(this.t("remove"))
             .setIcon("image-off")
-            .onClick(() => this.removeSticker(file));
+            .onClick(() => {
+              this.runSafely(
+                () => this.removeSticker(file),
+                "Removing sticker failed"
+              );
+            });
         });
       })
     );
 
     this.registerEvent(
-      this.app.workspace.on("editor-menu", (menu, editor, view) => {
+      this.app.workspace.on("editor-menu", (menu, _editor, view) => {
         const file = view.file;
 
         if (!file) return;
@@ -174,7 +195,12 @@ export default class SvgStickerPlugin extends Plugin {
           item
             .setTitle(this.t("choose"))
             .setIcon("image")
-            .onClick(() => this.openPicker(file));
+            .onClick(() => {
+              this.runSafely(
+                () => this.openPicker(file),
+                "Opening sticker picker failed"
+              );
+            });
         });
       })
     );
@@ -351,11 +377,6 @@ export default class SvgStickerPlugin extends Plugin {
   ) {
     if (!this.isSvgInIconFolder(svgPath)) {
       new Notice(this.t("invalidFolder"));
-      return;
-    }
-
-    if (this.makeAdapter.isReady()) {
-      await this.assignMakeSticker(target.path, svgPath);
       return;
     }
 
@@ -611,10 +632,13 @@ export default class SvgStickerPlugin extends Plugin {
     const src = this.app.vault.getResourcePath(file);
 
     if (!sticker) {
-      sticker = document.createElement("img");
-      sticker.className = "svg-sticker-explorer-icon";
-      sticker.alt = "";
-      sticker.loading = "lazy";
+      sticker = title.createEl("img", {
+        cls: "svg-sticker-explorer-icon",
+        attr: {
+          alt: "",
+          loading: "lazy"
+        }
+      });
 
       title.prepend(sticker);
     }
@@ -635,50 +659,87 @@ class SvgStickerSettingTab extends PluginSettingTab {
     super(app, plugin);
   }
 
-  display() {
-    const { containerEl } = this;
-
-    containerEl.empty();
-
+  getControlValue(key: string): unknown {
     const settings = this.plugin.getSettings();
-    const t = createTranslator(settings.language);
 
-    containerEl.createEl("h2", {
-      text: t("settingsTitle")
-    });
+    switch (key) {
+      case "iconFolder":
+        return settings.iconFolder;
 
-    new Setting(containerEl)
-      .setName(t("folderSetting"))
-      .setDesc(t("folderDesc"))
-      .addText(text => {
-        text
-          .setPlaceholder("embed/icons")
-          .setValue(settings.iconFolder)
-          .onChange(async value => {
-            await this.plugin.updateSettings({
-              iconFolder: value.trim()
-            });
-          });
+      case "language":
+        return settings.language;
+
+      default:
+        return undefined;
+    }
+  }
+
+  async setControlValue(
+    key: string,
+    value: unknown
+  ): Promise<void> {
+    if (key === "iconFolder" && typeof value === "string") {
+      await this.plugin.updateSettings({
+        iconFolder: value.trim()
       });
+      return;
+    }
 
-    new Setting(containerEl)
-      .setName(t("languageSetting"))
-      .setDesc(t("languageDesc"))
-      .addDropdown(dropdown => {
-        dropdown
-          .addOption("auto", t("auto"))
-          .addOption("ru", t("russian"))
-          .addOption("en", t("english"))
-          .addOption("ko", t("korean"))
-          .addOption("zh", t("chinese"))
-          .setValue(settings.language)
-          .onChange(async value => {
-            await this.plugin.updateSettings({
-              language: value as StickerLanguage
-            });
+    const languages: StickerLanguage[] = [
+      "auto",
+      "ru",
+      "en",
+      "ko",
+      "zh"
+    ];
 
-            this.display();
-          });
+    if (
+      key === "language" &&
+      typeof value === "string" &&
+      languages.includes(value as StickerLanguage)
+    ) {
+      await this.plugin.updateSettings({
+        language: value as StickerLanguage
       });
+    }
+  }
+
+  getSettingDefinitions() {
+    const t = createTranslator(
+      this.plugin.getSettings().language
+    );
+
+    return [
+      {
+        type: "group" as const,
+        heading: t("settingsTitle"),
+        items: [
+          {
+            name: t("folderSetting"),
+            desc: t("folderDesc"),
+            control: {
+              type: "text" as const,
+              key: "iconFolder",
+              placeholder: "embed/icons"
+            }
+          },
+          {
+            name: t("languageSetting"),
+            desc: t("languageDesc"),
+            control: {
+              type: "dropdown" as const,
+              key: "language",
+              options: {
+                auto: t("auto"),
+                ru: t("russian"),
+                en: t("english"),
+                ko: t("korean"),
+                zh: t("chinese")
+              }
+            }
+          }
+        ]
+      }
+    ];
   }
 }
