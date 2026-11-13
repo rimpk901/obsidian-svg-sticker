@@ -1,3 +1,8 @@
+[![GitHub release](https://img.shields.io/github/v/release/rimpk901/obsidian-svg-sticker?style=for-the-badge&logo=github&label=Latest%20Release)](https://github.com/rimpk901/obsidian-svg-sticker/releases/latest)
+[![GitHub downloads](https://img.shields.io/github/downloads/rimpk901/obsidian-svg-sticker/total?style=for-the-badge&logo=github)](https://github.com/rimpk901/obsidian-svg-sticker/releases)
+[![GitHub license](https://img.shields.io/github/license/rimpk901/obsidian-svg-sticker?style=for-the-badge)](LICENSE)
+[![Obsidian](https://img.shields.io/badge/Obsidian-Plugin-7C3AED?style=for-the-badge&logo=obsidian)](https://obsidian.md/)
+
 # 🎨 SVG Sticker
 
 **Bring your Obsidian vault to life with custom SVG icons!**
