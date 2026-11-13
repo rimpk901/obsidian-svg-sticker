@@ -2,8 +2,8 @@
   "id": "svg-sticker-makemd-rimpk",
   "name": "SVG Sticker",
   "version": "1.0.0",
-  "minAppVersion": "1.5.0",
-  "description": "Assign custom SVG stickers to notes, folders, and Make.md Spaces in Obsidian.",
+  "minAppVersion": "1.13.0",
+  "description": "Assign custom SVG stickers to notes, folders, and Make.md Spaces.",
   "author": "rimpk901",
   "isDesktopOnly": false
 }
