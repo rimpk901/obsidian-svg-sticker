@@ -1,7 +1,7 @@
-
 import {
   App,
   Plugin,
+  TAbstractFile,
   TFile,
   TFolder,
   Notice,
@@ -20,6 +20,9 @@ import {
 
 import { createTranslator } from "./i18n";
 
+const ICON_CLASS = "svg-sticker-explorer-icon";
+const EXPLORER_TITLE_SELECTOR = ".nav-file-title, .nav-folder-title";
+
 export default class SvgStickerPlugin extends Plugin {
   private data: StickerData = {
     folderStickers: {},
@@ -30,6 +33,9 @@ export default class SvgStickerPlugin extends Plugin {
   private makeAdapter!: MakeMDAdapter;
   private observer: MutationObserver | null = null;
   private refreshQueued = false;
+  private fullRefreshRequested = false;
+  private pendingScopes = new Set<Element>();
+  private srcCache = new Map<string, string>();
 
   private runSafely(
     operation: () => Promise<unknown>,
@@ -216,6 +222,35 @@ export default class SvgStickerPlugin extends Plugin {
       })
     );
 
+    // Icon files changed: drop cached resource paths and redraw once.
+    const onSvgFileChanged = (file: TAbstractFile) => {
+      if (
+        file instanceof TFile &&
+        file.extension.toLowerCase() === "svg"
+      ) {
+        this.srcCache.clear();
+        this.refreshExplorer();
+      }
+    };
+
+    this.registerEvent(this.app.vault.on("modify", onSvgFileChanged));
+    this.registerEvent(this.app.vault.on("delete", onSvgFileChanged));
+    this.registerEvent(this.app.vault.on("rename", onSvgFileChanged));
+
+    // Frontmatter edited by hand: update just that note's row.
+    this.registerEvent(
+      this.app.metadataCache.on("changed", file => {
+        this.refreshFile(file);
+      })
+    );
+
+    // Metadata cache loaded from disk on startup does not fire "changed".
+    const resolvedRef = this.app.metadataCache.on("resolved", () => {
+      this.app.metadataCache.offref(resolvedRef);
+      this.refreshExplorer();
+    });
+    this.registerEvent(resolvedRef);
+
     this.startExplorerObserver();
 
     this.addSettingTab(new SvgStickerSettingTab(this.app, this));
@@ -224,6 +259,8 @@ export default class SvgStickerPlugin extends Plugin {
   onunload() {
     this.observer?.disconnect();
     this.observer = null;
+    this.pendingScopes.clear();
+    this.srcCache.clear();
     this.makeAdapter?.uninstallMenuHook();
   }
 
@@ -518,93 +555,160 @@ export default class SvgStickerPlugin extends Plugin {
   }
 
   private startExplorerObserver() {
-    const root = document.body;
+    this.observer = new MutationObserver(records => {
+      let hasWork = false;
 
-    this.observer = new MutationObserver(() => {
-      if (this.refreshQueued) return;
+      for (const record of records) {
+        // Item re-used by the explorer with a different path.
+        if (record.type === "attributes") {
+          const target = record.target as Element;
 
-      this.refreshQueued = true;
+          if (target.matches(EXPLORER_TITLE_SELECTOR)) {
+            this.pendingScopes.add(target);
+            hasWork = true;
+          }
 
-      window.requestAnimationFrame(() => {
-        this.refreshQueued = false;
-        this.refreshExplorer();
-      });
+          continue;
+        }
+
+        for (const node of Array.from(record.addedNodes)) {
+          if (node.nodeType !== Node.ELEMENT_NODE) continue;
+
+          const element = node as Element;
+
+          // Our own icon insertions must never trigger another pass.
+          if (element.classList.contains(ICON_CLASS)) continue;
+
+          if (
+            element.matches(EXPLORER_TITLE_SELECTOR) ||
+            element.querySelector(EXPLORER_TITLE_SELECTOR)
+          ) {
+            this.pendingScopes.add(element);
+            hasWork = true;
+          }
+        }
+      }
+
+      if (hasWork) this.scheduleRefresh();
     });
 
-    this.observer.observe(root, {
+    this.observer.observe(document.body, {
       childList: true,
-      subtree: true
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-path"]
     });
 
     this.register(() => this.observer?.disconnect());
   }
 
+  /** Full rescan of the explorer (rare: startup, icon files changed, assign/remove). */
   private refreshExplorer() {
-    const fileItems = document.querySelectorAll<HTMLElement>(
-      ".nav-file"
+    this.fullRefreshRequested = true;
+    this.scheduleRefresh();
+  }
+
+  /** Refresh only the explorer rows of a single file. */
+  private refreshFile(file: TFile) {
+    const rows = document.querySelectorAll<HTMLElement>(
+      `.nav-file-title[data-path="${CSS.escape(file.path)}"]`
     );
 
-    fileItems.forEach(item => {
-      const title = item.querySelector<HTMLElement>(
-        ".nav-file-title"
-      );
+    if (rows.length === 0) return;
 
-      if (!title) return;
+    rows.forEach(row => this.pendingScopes.add(row));
+    this.scheduleRefresh();
+  }
 
+  private scheduleRefresh() {
+    if (this.refreshQueued) return;
+
+    this.refreshQueued = true;
+
+    window.requestAnimationFrame(() => {
+      this.refreshQueued = false;
+
+      if (this.fullRefreshRequested) {
+        this.fullRefreshRequested = false;
+        this.pendingScopes.clear();
+        this.applyStickers(document);
+        return;
+      }
+
+      const scopes = [...this.pendingScopes];
+      this.pendingScopes.clear();
+
+      for (const scope of scopes) {
+        if (scope.isConnected) {
+          this.applyStickers(scope);
+        }
+      }
+    });
+  }
+
+  /** Applies stickers only to explorer rows inside `scope`. */
+  private applyStickers(scope: ParentNode) {
+    const titles: HTMLElement[] = [];
+
+    if (scope instanceof Element && scope.matches(EXPLORER_TITLE_SELECTOR)) {
+      titles.push(scope as HTMLElement);
+    }
+
+    scope
+      .querySelectorAll<HTMLElement>(EXPLORER_TITLE_SELECTOR)
+      .forEach(title => titles.push(title));
+
+    for (const title of titles) {
       const path =
         title.getAttribute("data-path") ??
-        item.getAttribute("data-path");
+        title.parentElement?.getAttribute("data-path");
 
-      if (!path) return;
+      if (!path) continue;
 
-      const file = this.app.vault.getAbstractFileByPath(path);
+      let svgPath: string | null = null;
 
-      if (!(file instanceof TFile)) return;
+      if (title.classList.contains("nav-folder-title")) {
+        svgPath = this.data.folderStickers[path] ?? null;
+      } else {
+        const file = this.app.vault.getAbstractFileByPath(path);
 
-      const sticker = this.app.metadataCache
-        .getFileCache(file)
-        ?.frontmatter?.sticker;
+        if (!(file instanceof TFile)) continue;
 
-      const svgPath =
-        typeof sticker === "string" &&
-        sticker.startsWith("vault//")
-          ? sticker.slice("vault//".length)
-          : null;
+        const sticker = this.app.metadataCache
+          .getFileCache(file)
+          ?.frontmatter?.sticker;
 
-      this.updateExplorerSticker(
-        title,
-        svgPath && this.isValidSvg(svgPath)
-          ? svgPath
-          : null
-      );
-    });
+        if (
+          typeof sticker === "string" &&
+          sticker.startsWith("vault//")
+        ) {
+          svgPath = sticker.slice("vault//".length);
+        }
+      }
 
-    const folderItems = document.querySelectorAll<HTMLElement>(
-      ".nav-folder"
-    );
+      this.updateExplorerSticker(title, svgPath);
+    }
+  }
 
-    folderItems.forEach(item => {
-      const title = item.querySelector<HTMLElement>(
-        ".nav-folder-title"
-      );
+  private getStickerSrc(svgPath: string): string | null {
+    const cached = this.srcCache.get(svgPath);
 
-      if (!title) return;
+    if (cached) return cached;
 
-      const path =
-        title.getAttribute("data-path") ??
-        item.getAttribute("data-path");
+    const file = this.app.vault.getAbstractFileByPath(svgPath);
 
-      if (!path) return;
+    if (
+      !(file instanceof TFile) ||
+      file.extension.toLowerCase() !== "svg"
+    ) {
+      return null;
+    }
 
-      const svgPath = this.data.folderStickers[path];
+    const src = this.app.vault.getResourcePath(file);
 
-      this.updateExplorerSticker(
-        title,
-        svgPath && this.isValidSvg(svgPath)
-          ? svgPath
-          : null
-      );
-    });
+    this.srcCache.set(svgPath, src);
+
+    return src;
   }
 
   private updateExplorerSticker(
@@ -612,42 +716,41 @@ export default class SvgStickerPlugin extends Plugin {
     svgPath: string | null
   ) {
     let sticker = title.querySelector<HTMLImageElement>(
-      ":scope > .svg-sticker-explorer-icon"
+      `:scope > .${ICON_CLASS}`
     );
 
-    if (!svgPath) {
+    const src = svgPath ? this.getStickerSrc(svgPath) : null;
+
+    if (!src) {
       sticker?.remove();
-      title.removeClass("has-svg-sticker");
+
+      if (title.hasClass("has-svg-sticker")) {
+        title.removeClass("has-svg-sticker");
+      }
+
       return;
     }
-
-    const file = this.app.vault.getAbstractFileByPath(svgPath);
-
-    if (!(file instanceof TFile)) {
-      sticker?.remove();
-      title.removeClass("has-svg-sticker");
-      return;
-    }
-
-    const src = this.app.vault.getResourcePath(file);
 
     if (!sticker) {
+      // No "loading: lazy": deferred decoding of a re-created <img> is what shows up as flicker.
       sticker = title.createEl("img", {
-        cls: "svg-sticker-explorer-icon",
+        cls: ICON_CLASS,
+        prepend: true,
         attr: {
           alt: "",
-          loading: "lazy"
+          decoding: "sync",
+          draggable: "false"
         }
       });
-
-      title.prepend(sticker);
     }
 
     if (sticker.getAttribute("src") !== src) {
       sticker.setAttribute("src", src);
     }
 
-    title.addClass("has-svg-sticker");
+    if (!title.hasClass("has-svg-sticker")) {
+      title.addClass("has-svg-sticker");
+    }
   }
 }
 

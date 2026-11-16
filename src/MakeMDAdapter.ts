@@ -1,4 +1,3 @@
-
 import { App, View } from "obsidian";
 
 import { createTranslator } from "./i18n";
@@ -14,6 +13,7 @@ interface MakeMDSpaceManager {
 
 interface MakeMDUI {
   openMenu?: OpenMenu;
+  getUIPath?: GetUIPath;
 }
 
 interface MakeMDSuperstate {
@@ -66,6 +66,17 @@ type OpenMenu = (
   ...rest: unknown[]
 ) => unknown;
 
+type GetUIPath = (
+  this: unknown,
+  path: string,
+  thumbnail?: boolean
+) => string;
+
+// Make.md appends "?<random 0-999>" to every image URL on every call,
+// so each re-render of a virtualized row is a brand-new URL for the
+// browser and the icon is requested again instead of coming from cache.
+const RANDOM_CACHE_BUSTER = /\?\d{1,3}$/;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -100,6 +111,7 @@ function getString(value: unknown): string | null {
 
 export class MakeMDAdapter {
   private originalOpenMenu: OpenMenu | null = null;
+  private originalGetUIPath: GetUIPath | null = null;
   private patchedUI: MakeMDUI | null = null;
   private onChooseSticker: ((paths: string[]) => void) | null = null;
   private t: ReturnType<typeof createTranslator>;
@@ -389,7 +401,38 @@ export class MakeMDAdapter {
 
     ui.openMenu = patchedOpenMenu;
 
+    this.installStableUIPath(ui);
+
     return true;
+  }
+
+  /**
+   * Temporary workaround: makes Make.md image URLs stable between renders
+   * so the virtualized tree stops re-requesting every icon on scroll.
+   */
+  private installStableUIPath(ui: MakeMDUI): void {
+    const originalGetUIPath = ui.getUIPath;
+
+    if (typeof originalGetUIPath !== "function") return;
+
+    this.originalGetUIPath = originalGetUIPath;
+
+    const patchedGetUIPath: GetUIPath = function (...args) {
+      const result: unknown = Reflect.apply(
+        originalGetUIPath,
+        this,
+        args
+      );
+
+      // External URLs are returned untouched by Make.md: leave them alone.
+      if (typeof result !== "string" || result === args[0]) {
+        return result as string;
+      }
+
+      return result.replace(RANDOM_CACHE_BUSTER, "");
+    };
+
+    ui.getUIPath = patchedGetUIPath;
   }
 
   uninstallMenuHook(): void {
@@ -397,8 +440,13 @@ export class MakeMDAdapter {
       this.patchedUI.openMenu = this.originalOpenMenu;
     }
 
+    if (this.patchedUI && this.originalGetUIPath) {
+      this.patchedUI.getUIPath = this.originalGetUIPath;
+    }
+
     this.patchedUI = null;
     this.originalOpenMenu = null;
+    this.originalGetUIPath = null;
     this.onChooseSticker = null;
   }
 }
